@@ -1,0 +1,8 @@
+<launch>
+    <node pkg="midas_ros" type="midas_node.py" name="midas_node">
+        <rosparam>
+            hz: 5
+        </rosparam>
+        <remap from="/camera/color/image_raw/compressed" to="equirectangular/image_raw/compressed"/>
+    </node>
+</launch>
