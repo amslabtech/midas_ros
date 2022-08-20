@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import cv2
 import numpy as np
 import rospy
 import torch
@@ -7,6 +8,10 @@ from sensor_msgs.msg import CompressedImage
 
 
 class MiDaS:
+    _hz: float
+    _pixel_divisor: float
+    _model_type: str
+    _use_amp: bool
     _pub: rospy.Publisher
     _sub: rospy.Subscriber
     _input_image: np.ndarray
@@ -19,25 +24,34 @@ class MiDaS:
 
         rospy.init_node("midas_node", anonymous=True)
 
-        self._hz = rospy.get_param("~hz", 3)  # type: ignore
+        self._hz = rospy.get_param("~hz", 15.0)  # type: ignore
+        self._pixel_divisor = rospy.get_param("~pixel_divisor", 2.5)  # type: ignore
+        self._model_type = rospy.get_param("~model_type", "DPT_Hybrid")  # type: ignore
+        self._use_amp = rospy.get_param("~use_amp", True)  # type: ignore
+
         self._pub = rospy.Publisher(
             "/midas/depth/image_raw/compressed",
             CompressedImage, queue_size=1, tcp_nodelay=True)
         self._sub = rospy.Subscriber(
             "/camera/color/image_raw/compressed",
-            CompressedImage, self._compressed_image_callback, tcp_nodelay=True)
+            CompressedImage, self._compressed_image_callback, queue_size=1, tcp_nodelay=True)
         self._input_image = np.empty(0)
+        self._images = np.empty(0)
         self._compressed_image = CompressedImage()
         self._compressed_image.format = "jpeg"
 
+        torch.backends.cudnn.benchmark = True  # type: ignore
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self._midas = torch.hub.load("intel-isl/MiDaS", "DPT_Hybrid")
+        self._midas = torch.hub.load("intel-isl/MiDaS", self._model_type)
         self._midas.to(self._device).eval()
         self._transforms = torch.hub.load("intel-isl/MiDaS", "transforms").dpt_transform
 
     def _compressed_image_callback(self, data: CompressedImage) -> None:
 
-        self._input_image = cv2.imdecode(np.frombuffer(data.data, np.uint8), cv2.IMREAD_COLOR)  # type: ignore
+        decoded_image = cv2.imdecode(np.frombuffer(data.data, np.uint8), cv2.IMREAD_COLOR)  # type: ignore
+        self._input_image = cv2.resize(
+            decoded_image,
+            (int(decoded_image.shape[1]/self._pixel_divisor), int(decoded_image.shape[0]/self._pixel_divisor)))
         self._compressed_image.header = data.header
 
     def _estimate_depth(self, _) -> None:
@@ -46,14 +60,16 @@ class MiDaS:
             return
 
         with torch.no_grad():
-            input = self._transforms(self._input_image).to(self._device)
-            output = self._midas(input)
+            with torch.cuda.amp.autocast(enabled=self._use_amp):  # type: ignore
+                input = self._transforms(self._input_image).to(self._device)
+                output = self._midas(input)
             result = torch.nn.functional.interpolate(  # type: ignore
                 output.unsqueeze(1),
                 size=self._input_image.shape[:2],
                 mode="bilinear",
-                align_corners=False).squeeze().cpu().numpy()
-        result = (result - np.min(result)) / (np.max(result) - np.min(result)) * 255
+                align_corners=False).float().squeeze().cpu().numpy()
+
+        result = np.uint8(cv2.normalize(result, None, 0, 255, cv2.NORM_MINMAX))  # type: ignore
         self._compressed_image.data = cv2.imencode(".jpg", result)[1].squeeze().tolist()  # type: ignore
         self._pub.publish(self._compressed_image)
 
