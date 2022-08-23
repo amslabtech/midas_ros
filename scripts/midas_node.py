@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import os
+
 import cv2
 import numpy as np
 import rospy
@@ -42,9 +44,17 @@ class MiDaS:
 
         torch.backends.cudnn.benchmark = True  # type: ignore
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self._midas = torch.hub.load("intel-isl/MiDaS", self._model_type)
-        self._midas.to(self._device).eval()
-        self._transforms = torch.hub.load("intel-isl/MiDaS", "transforms").dpt_transform
+        midas_path = os.path.join(torch.hub.get_dir(), "intel-isl_MiDaS_master")
+        self._midas = (
+            torch.hub.load(midas_path, self._model_type, source="local")
+            if os.path.exists(midas_path)
+            else torch.hub.load("intel-isl/MiDaS", self._model_type)
+        ).to(self._device).eval()
+        self._transforms = (
+            torch.hub.load(midas_path, "transforms", source="local")
+            if os.path.exists(midas_path)
+            else torch.hub.load("intel-isl/MiDaS", "transforms")
+        ).dpt_transform
 
     def _compressed_image_callback(self, data: CompressedImage) -> None:
 

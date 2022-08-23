@@ -6,6 +6,6 @@
             model_type: DPT_Hybrid
             use_amp: true
         </rosparam>
-        <remap from="/camera/color/image_raw/compressed" to="equirectangular/image_raw/compressed"/>
+        <remap from="/camera/color/image_raw/compressed" to="/cubemap/merged/image_raw/compressed"/>
     </node>
 </launch>
